@@ -24,7 +24,7 @@ from prody import writePDB
 from sc_utils import Packer, pack_side_chains
 
 
-def main(args) -> None:
+def lig_mpnn(args) -> None:
     """
     Inference function
     """
@@ -665,7 +665,7 @@ def main(args) -> None:
                         )
 
 
-if __name__ == "__main__":
+if __name__ == "__lig_mpnn__":
     argparser = argparse.ArgumentParser(
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
