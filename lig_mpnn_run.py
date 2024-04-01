@@ -7,6 +7,7 @@ import sys
 
 import numpy as np
 import torch
+from icecream import ic
 from data_utils import (
     alphabet,
     element_dict_rev,
@@ -20,23 +21,21 @@ from data_utils import (
     write_full_PDB,
 )
 from model_utils import ProteinMPNN
-from prody import writePDB
+from prody import writePDB, parsePDB
 from sc_utils import Packer, pack_side_chains
 
 
-def lig_mpnn(args) -> None:
+def lig_mpnn(args, cache_dir) -> None:
     """
     Inference function
     """
-    if args.seed:
-        seed = args.seed
-    else:
-        seed = int(np.random.randint(0, high=99999, size=1, dtype=int)[0])
+    seed = int(args.RNG_seed)
+
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
-    device = torch.device("cuda" if (torch.cuda.is_available()) else "cpu")
-    folder_for_outputs = args.out_folder
+    device = torch.device("cuda" if (int(args.GPUs) >=1) else "cpu")
+    folder_for_outputs = os.path.join(args.outdir, f'{args.name}_LigandMPNN_output')
     base_folder = folder_for_outputs
     if base_folder[-1] != "/":
         base_folder = base_folder + "/"
@@ -51,28 +50,64 @@ def lig_mpnn(args) -> None:
     if args.save_stats:
         if not os.path.exists(base_folder + "stats"):
             os.makedirs(base_folder + "stats", exist_ok=True)
-    if args.model_type == "protein_mpnn":
-        checkpoint_path = args.checkpoint_protein_mpnn
-    elif args.model_type == "ligand_mpnn":
-        checkpoint_path = args.checkpoint_ligand_mpnn
-    elif args.model_type == "per_residue_label_membrane_mpnn":
-        checkpoint_path = args.checkpoint_per_residue_label_membrane_mpnn
-    elif args.model_type == "global_label_membrane_mpnn":
-        checkpoint_path = args.checkpoint_global_label_membrane_mpnn
-    elif args.model_type == "soluble_mpnn":
-        checkpoint_path = args.checkpoint_soluble_mpnn
-    else:
-        print("Choose one of the available models")
-        sys.exit()
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    if args.model_type == "ligand_mpnn":
+    # if args.model_type == "protein_mpnn":
+    #     checkpoint_path = args.checkpoint_protein_mpnn
+    # elif args.model_type == "ligand_mpnn":
+    #     checkpoint_path = args.checkpoint_ligand_mpnn
+    # elif args.model_type == "per_residue_label_membrane_mpnn":
+    #     checkpoint_path = args.checkpoint_per_residue_label_membrane_mpnn
+    # elif args.model_type == "global_label_membrane_mpnn":
+    #     checkpoint_path = args.checkpoint_global_label_membrane_mpnn
+    # elif args.model_type == "soluble_mpnn":
+    #     checkpoint_path = args.checkpoint_soluble_mpnn
+    # else:
+    #     print("Choose one of the available models")
+    #     sys.exit()
+    if not args.lig_mpnn_model:
+        checkpoint_path = os.path.join(cache_dir, f'LigandMPNN_weights/ligandmpnn_v_32_{args.lig_mpnn_noise}_25.pt')
+        checkpoint = torch.load(checkpoint_path, map_location=device)
         atom_context_num = checkpoint["atom_context_num"]
         ligand_mpnn_use_side_chain_context = args.ligand_mpnn_use_side_chain_context
-        k_neighbors = checkpoint["num_edges"]
+        args.model_type = 'ligand_mpnn'
+
     else:
+        mpnn_model_dict = {'Local_Membrane' : 'per_residue_label_membrane_mpnn_v_48_020',
+                           'Global_Membrane' : 'global_label_membrane_mpnn_v_48_020',
+                           'Side-Chain_Packing' : 'ligandmpnn_sc_v_32_002_16',
+                           'Soluble' : f'solublempnn_v_48_{args.lig_mpnn_noise}'
+                           }
+        checkpoint_path = os.path.join(cache_dir, f'LigandMPNN_weights/{mpnn_model_dict[args.lig_mpnn_model]}.pt')
         atom_context_num = 1
         ligand_mpnn_use_side_chain_context = 0
-        k_neighbors = checkpoint["num_edges"]
+        if "soluble" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = "soluble_mpnn"
+        elif "global" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = "global_label_membrane_mpnn"   
+        elif "residue" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = "per_residue_label_membrane_mpnn"     
+        else:
+            args.model_type = "ligand_mpnn"
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+    k_neighbors = checkpoint["num_edges"]
+    args.omit_AA = args.omit_AAs
+    args.omit_AA_per_residue = args.omit_AA_jsonl
+    logger = args.loguru
+    logger.info(f'Using {args.model_type} for inverse folding')
+    # if not args.pdb_path_chains:
+    #     if not args.pdb_path_multi:
+    #         chain_ids = parsePDB(args.query).getChids()
+    #         ic(chain_ids)
+    # else:
+    #     args.chains_to_design = args.pdb_path_chains
+    # if args.model_type == "ligand_mpnn":
+    #     atom_context_num = checkpoint["atom_context_num"]
+    #     ligand_mpnn_use_side_chain_context = args.ligand_mpnn_use_side_chain_context
+    #     k_neighbors = checkpoint["num_edges"]
+    # else:
+    #     atom_context_num = 1
+    #     ligand_mpnn_use_side_chain_context = 0
+    #     k_neighbors = checkpoint["num_edges"]
 
     model = ProteinMPNN(
         node_features=128,
@@ -86,7 +121,7 @@ def lig_mpnn(args) -> None:
         model_type=args.model_type,
         ligand_mpnn_use_side_chain_context=ligand_mpnn_use_side_chain_context,
     )
-
+        
     model.load_state_dict(checkpoint["model_state_dict"])
     model.to(device)
     model.eval()
@@ -121,7 +156,8 @@ def lig_mpnn(args) -> None:
         with open(args.pdb_path_multi, "r") as fh:
             pdb_paths = list(json.load(fh))
     else:
-        pdb_paths = [args.pdb_path]
+        # pdb_paths = [args.pdb_path]
+        pdb_paths = [args.query]
 
     if args.fixed_residues_multi:
         with open(args.fixed_residues_multi, "r") as fh:
@@ -131,7 +167,6 @@ def lig_mpnn(args) -> None:
         fixed_residues_multi = {}
         for pdb in pdb_paths:
             fixed_residues_multi[pdb] = fixed_residues
-
     if args.redesigned_residues_multi:
         with open(args.redesigned_residues_multi, "r") as fh:
             redesigned_residues_multi = json.load(fh)
@@ -183,7 +218,7 @@ def lig_mpnn(args) -> None:
     # loop over PDB paths
     for pdb in pdb_paths:
         if args.verbose:
-            print("Designing protein from this path:", pdb)
+            ("Designing protein from this path:", pdb)
         fixed_residues = fixed_residues_multi[pdb]
         redesigned_residues = redesigned_residues_multi[pdb]
         parse_all_atoms_flag = args.ligand_mpnn_use_side_chain_context or (
@@ -303,8 +338,8 @@ def lig_mpnn(args) -> None:
                 for item in range(protein_dict["chain_mask"].shape[0])
                 if protein_dict["chain_mask"][item] == 0
             ]
-            print("These residues will be redesigned: ", PDB_residues_to_be_redesigned)
-            print("These residues will be fixed: ", PDB_residues_to_be_fixed)
+            logger.info(f"These residues will be redesigned: {PDB_residues_to_be_redesigned}")
+            logger.info(f"These residues will be fixed: {PDB_residues_to_be_fixed}")
 
         # specify which residues are linked
         if args.symmetry_residues:
@@ -331,7 +366,7 @@ def lig_mpnn(args) -> None:
 
         if args.homo_oligomer:
             if args.verbose:
-                print("Designing HOMO-OLIGOMER")
+                logger.info("Designing HOMO-OLIGOMER")
             chain_letters_set = list(set(chain_letters_list))
             reference_chain = chain_letters_set[0]
             lc = len(reference_chain)
@@ -369,20 +404,20 @@ def lig_mpnn(args) -> None:
                     atom_mask = list(protein_dict["Y_m"].cpu().numpy())
                     number_of_atoms_parsed = np.sum(atom_mask)
                 else:
-                    print("No ligand atoms parsed")
+                    logger.info("No ligand atoms parsed")
                     number_of_atoms_parsed = 0
                     atom_types = ""
                     atom_coords = []
                 if number_of_atoms_parsed == 0:
-                    print("No ligand atoms parsed")
+                    logger.info("No ligand atoms parsed")
                 elif args.model_type == "ligand_mpnn":
-                    print(
+                    logger.info(
                         f"The number of ligand atoms parsed is equal to: {number_of_atoms_parsed}"
                     )
-                    for i, atom_type in enumerate(atom_types):
-                        print(
-                            f"Type: {element_dict_rev[atom_type]}, Coords {atom_coords[i]}, Mask {atom_mask[i]}"
-                        )
+                    # for i, atom_type in enumerate(atom_types):
+                    #     print(
+                    #         f"Type: {element_dict_rev[atom_type]}, Coords {atom_coords[i]}, Mask {atom_mask[i]}"
+                    #     )
             feature_dict = featurize(
                 protein_dict,
                 cutoff_for_score=args.ligand_mpnn_cutoff_for_score,
@@ -393,7 +428,8 @@ def lig_mpnn(args) -> None:
             feature_dict["batch_size"] = args.batch_size
             B, L, _, _ = feature_dict["X"].shape  # batch size should be 1 for now.
             # add additional keys to the feature dictionary
-            feature_dict["temperature"] = args.temperature
+            # feature_dict["temperature"] = args.temperature
+            feature_dict["temperature"] = args.temp
             feature_dict["bias"] = (
                 (-1e8 * omit_AA[None, None, :] + bias_AA).repeat([1, L, 1])
                 + bias_AA_per_residue[None]
@@ -461,10 +497,10 @@ def lig_mpnn(args) -> None:
                 seq_out_str += [args.fasta_seq_separation]
             seq_out_str = "".join(seq_out_str)[:-1]
 
-            output_fasta = base_folder + "/seqs/" + name + args.file_ending + ".fa"
+            output_fasta = base_folder + "/seqs/" + name + ".fa"
             output_backbones = base_folder + "/backbones/"
             output_packed = base_folder + "/packed/"
-            output_stats_path = base_folder + "stats/" + name + args.file_ending + ".pt"
+            output_stats_path = base_folder + "stats/" + name + ".pt"
 
             out_dict = {}
             out_dict["generated_sequences"] = S_stack.cpu()
@@ -475,13 +511,14 @@ def lig_mpnn(args) -> None:
             out_dict["mask"] = feature_dict["mask"][0].cpu()
             out_dict["chain_mask"] = feature_dict["chain_mask"][0].cpu()
             out_dict["seed"] = seed
-            out_dict["temperature"] = args.temperature
+            # out_dict["temperature"] = args.temperature
+            out_dict["temperature"] = args.temp
             if args.save_stats:
                 torch.save(out_dict, output_stats_path)
 
             if args.pack_side_chains:
                 if args.verbose:
-                    print("Packing side chains...")
+                    logger.info("Packing side chains...")
                 feature_dict_ = featurize(
                     protein_dict,
                     cutoff_for_score=8.0,
@@ -537,7 +574,8 @@ def lig_mpnn(args) -> None:
                 f.write(
                     ">{}, T={}, seed={}, num_res={}, num_ligand_res={}, use_ligand_context={}, ligand_cutoff_distance={}, batch_size={}, number_of_batches={}, model_path={}\n{}\n".format(
                         name,
-                        args.temperature,
+                        # args.temperature,
+                        args.temp,
                         seed,
                         torch.sum(rec_mask).cpu().numpy(),
                         torch.sum(combined_mask[:1]).cpu().numpy(),
@@ -586,7 +624,7 @@ def lig_mpnn(args) -> None:
                             + name
                             + "_"
                             + str(ix_suffix)
-                            + args.file_ending
+                            # + args.file_ending
                             + ".pdb",
                             backbone + other_atoms,
                         )
@@ -596,7 +634,7 @@ def lig_mpnn(args) -> None:
                             + name
                             + "_"
                             + str(ix_suffix)
-                            + args.file_ending
+                            # + args.file_ending
                             + ".pdb",
                             backbone,
                         )
@@ -615,7 +653,7 @@ def lig_mpnn(args) -> None:
                                 + str(ix_suffix)
                                 + "_"
                                 + str(c_pack + 1)
-                                + args.file_ending
+                                # + args.file_ending
                                 + ".pdb",
                                 X_stack[ix].cpu().numpy(),
                                 X_m_stack[ix].cpu().numpy(),
@@ -642,7 +680,8 @@ def lig_mpnn(args) -> None:
                             ">{}, id={}, T={}, seed={}, overall_confidence={}, ligand_confidence={}, seq_rec={}\n{}".format(
                                 name,
                                 ix_suffix,
-                                args.temperature,
+                                # args.temperature,
+                                args.temp,
                                 seed,
                                 loss_np,
                                 loss_XY_np,
@@ -655,7 +694,8 @@ def lig_mpnn(args) -> None:
                             ">{}, id={}, T={}, seed={}, overall_confidence={}, ligand_confidence={}, seq_rec={}\n{}\n".format(
                                 name,
                                 ix_suffix,
-                                args.temperature,
+                                # args.temperature,
+                                args.temp,
                                 seed,
                                 loss_np,
                                 loss_XY_np,
