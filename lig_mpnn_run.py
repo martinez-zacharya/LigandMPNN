@@ -74,7 +74,8 @@ def lig_mpnn(args, cache_dir) -> None:
         mpnn_model_dict = {'Local_Membrane' : 'per_residue_label_membrane_mpnn_v_48_020',
                            'Global_Membrane' : 'global_label_membrane_mpnn_v_48_020',
                            'Side-Chain_Packing' : 'ligandmpnn_sc_v_32_002_16',
-                           'Soluble' : f'solublempnn_v_48_{args.lig_mpnn_noise}'
+                           'Soluble' : f'solublempnn_v_48_{args.lig_mpnn_noise}',
+                           'ProteinMPNN' : f'proteinmpnn_v_48_{args.lig_mpnn_noise}'
                            }
         checkpoint_path = os.path.join(cache_dir, f'LigandMPNN_weights/{mpnn_model_dict[args.lig_mpnn_model]}.pt')
         atom_context_num = 1
@@ -85,6 +86,8 @@ def lig_mpnn(args, cache_dir) -> None:
             args.model_type = "global_label_membrane_mpnn"   
         elif "residue" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
             args.model_type = "per_residue_label_membrane_mpnn"     
+        elif "protein" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = 'protein_mpnn'
         else:
             args.model_type = "ligand_mpnn"
         checkpoint = torch.load(checkpoint_path, map_location=device)
