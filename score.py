@@ -17,46 +17,105 @@ from data_utils import (
 from model_utils import ProteinMPNN
 
 
-def main(args) -> None:
+def ligmpnn_score(args, cache_dir) -> None:
     """
     Inference function
     """
-    if args.seed:
-        seed = args.seed
-    else:
-        seed = int(np.random.randint(0, high=99999, size=1, dtype=int)[0])
+    # if args.seed:
+    #     seed = args.seed
+    # else:
+    #     seed = int(np.random.randint(0, high=99999, size=1, dtype=int)[0])
+    # torch.manual_seed(seed)
+    # random.seed(seed)
+    # np.random.seed(seed)
+    # device = torch.device("cuda" if (torch.cuda.is_available()) else "cpu")
+    # folder_for_outputs = args.out_folder
+    # base_folder = folder_for_outputs
+    # if base_folder[-1] != "/":
+    #     base_folder = base_folder + "/"
+    # if not os.path.exists(base_folder):
+    #     os.makedirs(base_folder, exist_ok=True)
+    # if args.model_type == "protein_mpnn":
+    #     checkpoint_path = args.checkpoint_protein_mpnn
+    # elif args.model_type == "ligand_mpnn":
+    #     checkpoint_path = args.checkpoint_ligand_mpnn
+    # elif args.model_type == "per_residue_label_membrane_mpnn":
+    #     checkpoint_path = args.checkpoint_per_residue_label_membrane_mpnn
+    # elif args.model_type == "global_label_membrane_mpnn":
+    #     checkpoint_path = args.checkpoint_global_label_membrane_mpnn
+    # elif args.model_type == "soluble_mpnn":
+    #     checkpoint_path = args.checkpoint_soluble_mpnn
+    # else:
+    #     print("Choose one of the available models")
+    #     sys.exit()
+    # checkpoint = torch.load(checkpoint_path, map_location=device)
+    seed = int(args.RNG_seed)
+
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
-    device = torch.device("cuda" if (torch.cuda.is_available()) else "cpu")
-    folder_for_outputs = args.out_folder
+    device = torch.device("cuda" if (int(args.GPUs) >=1) else "cpu")
+    folder_for_outputs = os.path.join(args.outdir, f'{args.name}_LigandMPNN_output')
     base_folder = folder_for_outputs
     if base_folder[-1] != "/":
         base_folder = base_folder + "/"
     if not os.path.exists(base_folder):
         os.makedirs(base_folder, exist_ok=True)
-    if args.model_type == "protein_mpnn":
-        checkpoint_path = args.checkpoint_protein_mpnn
-    elif args.model_type == "ligand_mpnn":
-        checkpoint_path = args.checkpoint_ligand_mpnn
-    elif args.model_type == "per_residue_label_membrane_mpnn":
-        checkpoint_path = args.checkpoint_per_residue_label_membrane_mpnn
-    elif args.model_type == "global_label_membrane_mpnn":
-        checkpoint_path = args.checkpoint_global_label_membrane_mpnn
-    elif args.model_type == "soluble_mpnn":
-        checkpoint_path = args.checkpoint_soluble_mpnn
-    else:
-        print("Choose one of the available models")
-        sys.exit()
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    if args.model_type == "ligand_mpnn":
+    if not os.path.exists(base_folder + "seqs"):
+        os.makedirs(base_folder + "seqs", exist_ok=True)
+    if not os.path.exists(base_folder + "backbones"):
+        os.makedirs(base_folder + "backbones", exist_ok=True)
+    if not os.path.exists(base_folder + "packed"):
+        os.makedirs(base_folder + "packed", exist_ok=True)
+    if args.save_stats:
+        if not os.path.exists(base_folder + "stats"):
+            os.makedirs(base_folder + "stats", exist_ok=True)
+    # if args.model_type == "protein_mpnn":
+    #     checkpoint_path = args.checkpoint_protein_mpnn
+    # elif args.model_type == "ligand_mpnn":
+    #     checkpoint_path = args.checkpoint_ligand_mpnn
+    # elif args.model_type == "per_residue_label_membrane_mpnn":
+    #     checkpoint_path = args.checkpoint_per_residue_label_membrane_mpnn
+    # elif args.model_type == "global_label_membrane_mpnn":
+    #     checkpoint_path = args.checkpoint_global_label_membrane_mpnn
+    # elif args.model_type == "soluble_mpnn":
+    #     checkpoint_path = args.checkpoint_soluble_mpnn
+    # else:
+    #     print("Choose one of the available models")
+    #     sys.exit()
+
+    if not args.lig_mpnn_model:
+        checkpoint_path = os.path.join(cache_dir, f'LigandMPNN_weights/ligandmpnn_v_32_{args.lig_mpnn_noise}_25.pt')
+        checkpoint = torch.load(checkpoint_path, map_location=device)
         atom_context_num = checkpoint["atom_context_num"]
         ligand_mpnn_use_side_chain_context = args.ligand_mpnn_use_side_chain_context
-        k_neighbors = checkpoint["num_edges"]
+        args.model_type = 'ligand_mpnn'
+
     else:
+        mpnn_model_dict = {'Local_Membrane' : 'per_residue_label_membrane_mpnn_v_48_020',
+                           'Global_Membrane' : 'global_label_membrane_mpnn_v_48_020',
+                           'Side-Chain_Packing' : 'ligandmpnn_sc_v_32_002_16',
+                           'Soluble' : f'solublempnn_v_48_{args.lig_mpnn_noise}',
+                           'ProteinMPNN' : f'proteinmpnn_v_48_{args.lig_mpnn_noise}'
+                           }
+        checkpoint_path = os.path.join(cache_dir, f'LigandMPNN_weights/{mpnn_model_dict[args.lig_mpnn_model]}.pt')
         atom_context_num = 1
         ligand_mpnn_use_side_chain_context = 0
-        k_neighbors = checkpoint["num_edges"]
+        if "soluble" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = "soluble_mpnn"
+        elif "global" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = "global_label_membrane_mpnn"   
+        elif "residue" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = "per_residue_label_membrane_mpnn"     
+        elif "protein" in f'{mpnn_model_dict[args.lig_mpnn_model]}':
+            args.model_type = 'protein_mpnn'
+        else:
+            args.model_type = "ligand_mpnn"
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+
+
+
+    k_neighbors = checkpoint["num_edges"]
 
     model = ProteinMPNN(
         node_features=128,

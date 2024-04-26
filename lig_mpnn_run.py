@@ -94,7 +94,7 @@ def lig_mpnn(args, cache_dir) -> None:
 
     k_neighbors = checkpoint["num_edges"]
     args.omit_AA = args.omit_AAs
-    args.omit_AA_per_residue = args.omit_AA_jsonl
+    # args.omit_AA_per_residue = args.omit_AA_jsonl
     logger = args.loguru
     logger.info(f'Using {args.model_type} for inverse folding')
     # if not args.pdb_path_chains:

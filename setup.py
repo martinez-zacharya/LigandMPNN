@@ -2,4 +2,4 @@
 
 from setuptools import setup
 
-setup(py_modules = ['lig_mpnn_run'])
+setup(py_modules = ['lig_mpnn_run', 'score'])
