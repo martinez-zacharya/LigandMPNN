@@ -6,6 +6,7 @@ import random
 import sys
 
 import numpy as np
+import tqdm
 import torch
 from icecream import ic
 from data_utils import (
@@ -448,7 +449,7 @@ def lig_mpnn(args, cache_dir) -> None:
             loss_list = []
             loss_per_residue_list = []
             loss_XY_list = []
-            for _ in range(args.number_of_batches):
+            for _ in tqdm.tqdm(range(args.number_of_batches)):
                 feature_dict["randn"] = torch.randn(
                     [feature_dict["batch_size"], feature_dict["mask"].shape[1]],
                     device=device,
