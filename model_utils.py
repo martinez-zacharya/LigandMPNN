@@ -631,7 +631,7 @@ class ProteinMPNN(torch.nn.Module):
             mask_bw = mask_bw.repeat(B_decoder, 1, 1, 1)
             decoding_order = decoding_order.repeat(B_decoder, 1)
 
-        S_true = S_true.repeat(B_decoder, 1)
+        S_true = S_true.repeat(B_decoder, 1).long()
         h_V = h_V.repeat(B_decoder, 1, 1)
         h_E = h_E.repeat(B_decoder, 1, 1, 1)
         mask = mask.repeat(B_decoder, 1)
@@ -655,15 +655,20 @@ class ProteinMPNN(torch.nn.Module):
                 h_V = layer(h_V, h_ESV, mask)
 
         logits = self.W_out(h_V)
-        log_probs = torch.nn.functional.log_softmax(logits, dim=-1)
-
+        log_probs = torch.nn.functional.log_softmax(logits, dim=-1).float()
+        criterion = torch.nn.NLLLoss(reduction='none')
+        loss = criterion(
+            log_probs.contiguous().view(-1,log_probs.size(-1)),
+            S_true.contiguous().view(-1)
+        ).view(S_true.size())
+        scores = -1 * torch.sum(loss * mask, dim=-1) / torch.sum(mask, dim=-1)
         output_dict = {
             "S": S_true,
             "log_probs": log_probs,
             "logits": logits,
             "decoding_order": decoding_order,
         }
-        return output_dict
+        return output_dict, scores
 
 
 class ProteinFeaturesLigand(torch.nn.Module):
@@ -1514,7 +1519,7 @@ class ProteinFeaturesMembrane(torch.nn.Module):
         mask = input_features["mask"]
         R_idx = input_features["R_idx"]
         chain_labels = input_features["chain_labels"]
-        membrane_per_residue_labels = input_features["membrane_per_residue_labels"]
+        membrane_per_residue_labels = input_features["membrane_per_residue_labels"].to(torch.int64).squeeze()
 
         if self.augment_eps > 0:
             X = X + self.augment_eps * torch.randn_like(X)
@@ -1569,7 +1574,6 @@ class ProteinFeaturesMembrane(torch.nn.Module):
         E = torch.cat((E_positional, RBF_all), -1)
         E = self.edge_embedding(E)
         E = self.norm_edges(E)
-
         C_1hot = torch.nn.functional.one_hot(
             membrane_per_residue_labels, self.num_classes
         ).float()
@@ -1718,6 +1722,10 @@ class EncLayer(torch.nn.Module):
         """Parallel computation of full transformer layer"""
 
         h_EV = cat_neighbors_nodes(h_V, h_E, E_idx)
+        if len(h_V.size()) == 2:
+            h_V = h_V.unsqueeze(0)
+        # print(f'{h_V.size()=}')
+        # print(f'{h_EV.size()=}')
         h_V_expand = h_V.unsqueeze(-2).expand(-1, -1, h_EV.size(-2), -1)
         h_EV = torch.cat([h_V_expand, h_EV], -1)
         h_message = self.W3(self.act(self.W2(self.act(self.W1(h_EV)))))
@@ -1752,6 +1760,12 @@ def gather_nodes(nodes, neighbor_idx):
     # Features [B,N,C] at Neighbor indices [B,N,K] => [B,N,K,C]
     # Flatten and expand indices per batch [B,N,K] => [B,NK] => [B,NK,C]
     neighbors_flat = neighbor_idx.reshape((neighbor_idx.shape[0], -1))
+    if len(nodes.size()) == 2:
+        nodes = nodes.unsqueeze(0)
+    # print(f'{len(nodes.size())=}')
+    # print(f'{nodes=}')
+    # print(f'{nodes.size()=}')
+    # print(f'{nodes.size(2)=}')
     neighbors_flat = neighbors_flat.unsqueeze(-1).expand(-1, -1, nodes.size(2))
     # Gather and re-pack
     neighbor_features = torch.gather(nodes, 1, neighbors_flat)
